@@ -7,7 +7,6 @@ from pathlib import Path
 import os
 from dotenv import load_dotenv
 load_dotenv()  # Load environment variables from .env file
-import dj_database_url
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -16,7 +15,7 @@ SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-hms-replace-this-befo
 
 DEBUG = os.environ.get('DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = ["*"]
+ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1,.railway.app,.railway.internal').split(',')
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -66,16 +65,9 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'hms_project.wsgi.application'
 
-DB_LIVE = os.environ.get('DB_LIVE')
+DB_LIVE = os.environ.get('DB_LIVE', 'False')
 
-if DB_LIVE in ["False", False]:
-    DATABASES = {
-        'default': dj_database_url.config(
-            default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}"
-        )
-    }
-
-else:
+if DB_LIVE == 'True':
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
@@ -86,7 +78,14 @@ else:
             'PORT': os.getenv('DB_PORT'),
         }
     }
-#postgresql://postgres:DjZicRDgSgGysUKjMQpymmJjHsIareLL@turntable.proxy.rlwy.net:14438/railway
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
+# Note: Use Railway DATABASE_URL plugin. Set DB_LIVE=True
 
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
