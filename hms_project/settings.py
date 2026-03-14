@@ -5,6 +5,8 @@ Barangay Housing Village – Typhoon Haiyan (Yolanda) Relief Program
 
 from pathlib import Path
 import os
+from dotenv import load_dotenv
+load_dotenv()  # Load environment variables from .env file
 import dj_database_url
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -67,12 +69,27 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'hms_project.wsgi.application'
 
-# Database
-DATABASES = {
-    'default': dj_database_url.config(
-        default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}"
-    )
-}
+DB_LIVE = os.environ.get('DB_LIVE')
+
+if DB_LIVE in ["False", False]:
+    DATABASES = {
+        'default': dj_database_url.config(
+            default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}"
+        )
+    }
+
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.getenv('DB_NAME'),
+            'USER': os.getenv('DB_USER'),
+            'PASSWORD': os.getenv('DB_PASSWORD'),
+            'HOST': os.getenv('DB_HOST'),
+            'PORT': os.getenv('DB_PORT'),
+        }
+    }
+#postgresql://postgres:DjZicRDgSgGysUKjMQpymmJjHsIareLL@turntable.proxy.rlwy.net:14438/railway
 
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
