@@ -29,6 +29,8 @@ INSTALLED_APPS = [
     'crispy_forms',
     'crispy_bootstrap5',
     'whitenoise.runserver_nostatic',  # For static files in development
+    # Local apps
+    'housing',
 ]
 
 MIDDLEWARE = [
