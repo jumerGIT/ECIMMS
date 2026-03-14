@@ -68,16 +68,9 @@ WSGI_APPLICATION = 'hms_project.wsgi.application'
 DB_LIVE = os.environ.get('DB_LIVE', 'False')
 
 if DB_LIVE == 'True':
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.postgresql',
-            'NAME': os.getenv('DB_NAME'),
-            'USER': os.getenv('DB_USER'),
-            'PASSWORD': os.getenv('DB_PASSWORD'),
-            'HOST': os.getenv('DB_HOST'),
-            'PORT': os.getenv('DB_PORT'),
-        }
-    }
+    import dj_database_url
+    DATABASES["default"] = dj_database_url.parse(os.environ.get("DATABASE_URL"))
+    DATABASES["default"]["ENGINE"] = "django.db.backends.postgresql"
 else:
     DATABASES = {
         'default': {
