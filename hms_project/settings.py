@@ -75,9 +75,12 @@ DATABASES = {
 }
 
 if DB_LIVE == 'True':
-    import dj_database_url
-    DATABASES["default"] = dj_database_url.parse(os.environ.get("DATABASE_URL") or "")
-    if not DATABASES["default"]:
+    db_url = os.environ.get("DATABASE_URL")
+    if db_url:
+        import dj_database_url
+        DATABASES["default"] = dj_database_url.parse(db_url)
+        DATABASES["default"]["ENGINE"] = "django.db.backends.postgresql"
+    else:
         DATABASES["default"] = {
             'ENGINE': 'django.db.backends.postgresql',
             'NAME': os.getenv('DB_NAME'),
