@@ -21,6 +21,8 @@ from django.utils import timezone
 from django.views.generic import ListView, DetailView, UpdateView
 from django.contrib.auth.mixins import LoginRequiredMixin
 
+from django.http import HttpResponse
+
 from .forms import AddHouseForm, ApplicationForm, RegisterForm, ReviewApplicationForm
 from .models import ActivityLog, AllocationHistory, Application, CustomUser, House, HouseholdMember, SendingArea
 
@@ -84,6 +86,13 @@ def log_activity(request, action, description):
         description=description,
         ip_address=_get_client_ip(request),
     )
+
+
+# ---------------------------------------------------------------------------
+# Health check (used by Railway deployment healthcheck)
+# ---------------------------------------------------------------------------
+def health(request):
+    return HttpResponse('OK', content_type='text/plain')
 
 
 # ---------------------------------------------------------------------------
