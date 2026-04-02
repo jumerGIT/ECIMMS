@@ -10,4 +10,9 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('', include('housing.urls')),
     path('api/', include('housing.api_urls')),
-] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+]
+
+# Serve media files in development (skipped when CLOUDINARY_URL is set)
+_media_root = getattr(settings, 'MEDIA_ROOT', None)
+if _media_root:
+    urlpatterns += static(settings.MEDIA_URL, document_root=_media_root)
