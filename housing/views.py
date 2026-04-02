@@ -900,8 +900,11 @@ def walkin_application(request):
                             f'{prefix}_{user.pk}.jpg',
                             'image/jpeg', len(img_bytes), None,
                         )
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        import logging
+                        logging.getLogger(__name__).error(
+                            'inject_b64 walkin failed for %s: %s', post_key, e
+                        )
 
             inject_b64('hh_image_data',  'hh_image',         'hh')
             inject_b64('nid_front_data', 'national_id_front', 'nid_front')
@@ -994,8 +997,11 @@ def my_application(request):
                         f"{prefix}_{uuid.uuid4().hex}.jpg",
                         'image/jpeg', len(img_bytes), None,
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).error(
+                        'inject_b64 my_application failed for %s: %s', post_key, e
+                    )
 
         inject_b64('hh_image_data',  'hh_image',          'hh')
         inject_b64('nid_front_data', 'national_id_front', 'nid_front')
