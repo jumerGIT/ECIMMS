@@ -27,8 +27,6 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     # Third-party
-    'cloudinary_storage',
-    'cloudinary',
     'rest_framework',
     'rest_framework.authtoken',
     'crispy_forms',
@@ -113,6 +111,7 @@ CLOUDINARY_URL = os.environ.get('CLOUDINARY_URL')  # e.g. cloudinary://api_key:a
 
 if CLOUDINARY_URL:
     # Production: serve media from Cloudinary
+    INSTALLED_APPS += ['cloudinary_storage', 'cloudinary']
     DEFAULT_FILE_STORAGE = 'cloudinary_storage.storage.MediaCloudinaryStorage'
     MEDIA_URL = '/media/'
 else:
