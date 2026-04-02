@@ -15,9 +15,14 @@ SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-hms-replace-this-befo
 
 DEBUG = os.environ.get('DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1,.railway.app,.railway.internal').split(',')
+ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1,.railway.app,.up.railway.app,.railway.internal').split(',')
 
-CSRF_TRUSTED_ORIGINS = [s.strip() for s in os.environ.get("CSRF_TRUSTED_ORIGINS", "https://*.railway.app").split(",")]
+# Railway automatically sets RAILWAY_PUBLIC_DOMAIN — add it so healthcheck never gets a 400
+_railway_domain = os.environ.get('RAILWAY_PUBLIC_DOMAIN')
+if _railway_domain and _railway_domain not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append(_railway_domain)
+
+CSRF_TRUSTED_ORIGINS = [s.strip() for s in os.environ.get("CSRF_TRUSTED_ORIGINS", "https://*.railway.app,https://*.up.railway.app").split(",")]
 
 INSTALLED_APPS = [
     'django.contrib.admin',
