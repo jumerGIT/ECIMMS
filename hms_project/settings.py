@@ -69,31 +69,24 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'hms_project.wsgi.application'
 
-DB_LIVE = os.environ.get('DB_LIVE', 'False')
+import dj_database_url
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+_DATABASE_URL = os.environ.get("DATABASE_URL")
+
+if _DATABASE_URL:
+    # Production (Railway): parse the full DATABASE_URL
+    # conn_max_age=600 keeps connections alive for 10 min (connection pooling)
+    DATABASES = {
+        'default': dj_database_url.config(default=_DATABASE_URL, conn_max_age=600)
     }
-}
-
-if DB_LIVE == 'True':
-    db_url = os.environ.get("DATABASE_URL")
-    if db_url:
-        import dj_database_url
-        DATABASES["default"] = dj_database_url.parse(db_url)
-        DATABASES["default"]["ENGINE"] = "django.db.backends.postgresql"
-    else:
-        DATABASES["default"] = {
-            'ENGINE': 'django.db.backends.postgresql',
-            'NAME': os.getenv('DB_NAME'),
-            'USER': os.getenv('DB_USER'),
-            'PASSWORD': os.getenv('DB_PASSWORD'),
-            'HOST': os.getenv('DB_HOST'),
-            'PORT': os.getenv('DB_PORT', '5432'),
+else:
+    # Local development: SQLite
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
         }
-# Note: Use Railway DATABASE_URL plugin. Set DB_LIVE=True
+    }
 
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
