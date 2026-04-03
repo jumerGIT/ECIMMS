@@ -95,6 +95,8 @@ def _convert_postgresql(cursor):
         # Django M2M through-tables for CustomUser
         ('housing_customuser_groups',           'customuser_id'),
         ('housing_customuser_user_permissions', 'customuser_id'),
+        # Django admin log references the user model
+        ('django_admin_log',                    'user_id'),
     ]
 
     # Include authtoken if present
