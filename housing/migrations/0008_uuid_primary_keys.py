@@ -1,141 +1,191 @@
-import uuid
+import uuid as _uuid
 
 from django.db import migrations, models
 
 
-def convert_pks_to_uuid(apps, schema_editor):
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _uuid_field():
+    return models.UUIDField(
+        default=_uuid.uuid4, editable=False, primary_key=True, serialize=False
+    )
+
+
+def _convert_postgresql(cursor):
     """
-    PostgreSQL-only: converts PK and FK columns from bigint → uuid.
+    Convert all relevant PK and FK bigint columns to uuid on PostgreSQL.
 
-    PostgreSQL cannot cast bigint directly to uuid; we use gen_random_uuid()
-    instead.  Since the database is always empty at this point (fresh deploy),
-    the random values assigned here don't matter.
-
-    SQLite handles the conversion automatically via table-recreation inside the
-    AlterField operations that follow this RunPython, so this function is a
-    no-op for any non-PostgreSQL backend.
+    Steps:
+      1. Drop every FK constraint that references the 5 tables whose PKs
+         we are converting (we query information_schema to get their names).
+      2. Drop the PK constraints on those tables (required before type change
+         on some PG versions).
+      3. ALTER COLUMN id TYPE uuid USING gen_random_uuid() on each table.
+      4. Re-add PK constraints.
+      5. Change FK columns to uuid (USING gen_random_uuid() is safe here
+         because the database is always empty at migration time).
+      6. Re-add FK constraints so subsequent migrations can introspect them.
     """
-    if schema_editor.connection.vendor != 'postgresql':
-        return
 
-    with schema_editor.connection.cursor() as cursor:
-        # ── Step 1: drop every FK constraint that references the tables whose
-        #            PKs we are about to change.  We use a DO block so we can
-        #            loop over information_schema results inside a single round-
-        #            trip.  IF EXISTS prevents errors if a constraint was
-        #            already removed for any reason.
+    pk_tables = [
+        'housing_customuser',
+        'housing_house',
+        'housing_application',
+        'housing_householdmember',
+        'housing_allocationhistory',
+    ]
+
+    # ── 1. Drop FK constraints that reference any of the pk_tables ───────────
+    cursor.execute("""
+        SELECT DISTINCT tc.constraint_name, tc.table_name
+        FROM   information_schema.table_constraints  AS tc
+        JOIN   information_schema.referential_constraints AS rc
+               ON  rc.constraint_name   = tc.constraint_name
+               AND rc.constraint_schema = tc.table_schema
+        JOIN   information_schema.table_constraints  AS tr
+               ON  tr.constraint_name  = rc.unique_constraint_name
+               AND tr.table_schema     = rc.unique_constraint_schema
+        WHERE  tc.constraint_type = 'FOREIGN KEY'
+          AND  tc.table_schema    = 'public'
+          AND  tr.table_name IN %s
+    """, [tuple(pk_tables)])
+
+    fk_rows = cursor.fetchall()
+    for constraint_name, table_name in fk_rows:
+        cursor.execute(
+            f'ALTER TABLE "{table_name}" '
+            f'DROP CONSTRAINT IF EXISTS "{constraint_name}"'
+        )
+
+    # ── 2 & 3 & 4. Drop PK, change id type, re-add PK ────────────────────────
+    for table in pk_tables:
+        # Find and drop the PK constraint (name varies, so look it up)
         cursor.execute("""
-            DO $$
-            DECLARE r RECORD;
-            BEGIN
-                FOR r IN (
-                    SELECT DISTINCT tc.constraint_name, tc.table_name
-                    FROM information_schema.table_constraints  tc
-                    JOIN information_schema.referential_constraints rc
-                        ON  tc.constraint_name = rc.constraint_name
-                    JOIN information_schema.table_constraints  tc_ref
-                        ON  rc.unique_constraint_name = tc_ref.constraint_name
-                    WHERE tc.constraint_type = 'FOREIGN KEY'
-                      AND tc.table_schema    = 'public'
-                      AND tc_ref.table_schema = 'public'
-                      AND tc_ref.table_name IN (
-                            'housing_customuser',
-                            'housing_house',
-                            'housing_application',
-                            'housing_householdmember',
-                            'housing_allocationhistory'
-                          )
-                )
-                LOOP
-                    EXECUTE format(
-                        'ALTER TABLE %I DROP CONSTRAINT IF EXISTS %I',
-                        r.table_name, r.constraint_name
-                    );
-                END LOOP;
-            END $$;
-        """)
+            SELECT constraint_name
+            FROM   information_schema.table_constraints
+            WHERE  table_schema   = 'public'
+              AND  table_name     = %s
+              AND  constraint_type = 'PRIMARY KEY'
+        """, [table])
+        pk_row = cursor.fetchone()
+        if pk_row:
+            cursor.execute(
+                f'ALTER TABLE "{table}" DROP CONSTRAINT "{pk_row[0]}"'
+            )
 
-        # ── Step 2: convert PK columns to uuid.
-        for table in [
-            'housing_customuser',
-            'housing_house',
-            'housing_application',
-            'housing_householdmember',
-            'housing_allocationhistory',
-        ]:
+        cursor.execute(
+            f'ALTER TABLE "{table}" '
+            f'ALTER COLUMN "id" TYPE uuid USING gen_random_uuid()'
+        )
+        cursor.execute(
+            f'ALTER TABLE "{table}" ADD PRIMARY KEY ("id")'
+        )
+
+    # ── 5. Change FK columns to uuid ─────────────────────────────────────────
+    fk_columns = [
+        ('housing_house',             'allocated_to_id'),
+        ('housing_application',       'applicant_id'),
+        ('housing_application',       'reviewed_by_id'),
+        ('housing_allocationhistory', 'house_id'),
+        ('housing_allocationhistory', 'beneficiary_id'),
+        ('housing_allocationhistory', 'allocated_by_id'),
+        ('housing_householdmember',   'application_id'),
+        # Django M2M through-tables for CustomUser
+        ('housing_customuser_groups',           'customuser_id'),
+        ('housing_customuser_user_permissions', 'customuser_id'),
+    ]
+
+    # Include authtoken if present
+    cursor.execute("""
+        SELECT 1 FROM information_schema.tables
+        WHERE  table_schema = 'public' AND table_name = 'authtoken_token'
+    """)
+    if cursor.fetchone():
+        fk_columns.append(('authtoken_token', 'user_id'))
+
+    for table, col in fk_columns:
+        cursor.execute("""
+            SELECT data_type
+            FROM   information_schema.columns
+            WHERE  table_schema = 'public'
+              AND  table_name   = %s
+              AND  column_name  = %s
+        """, [table, col])
+        row = cursor.fetchone()
+        if row and row[0] != 'uuid':
             cursor.execute(
                 f'ALTER TABLE "{table}" '
-                f'ALTER COLUMN "id" TYPE uuid USING gen_random_uuid()'
+                f'ALTER COLUMN "{col}" TYPE uuid USING gen_random_uuid()'
             )
 
-        # ── Step 3: convert FK columns that pointed at those PKs.
-        #            After the type change above the FK columns are still
-        #            bigint; change them to uuid as well.
-        fk_columns = [
-            ('housing_house',             'allocated_to_id'),
-            ('housing_application',       'applicant_id'),
-            ('housing_application',       'reviewed_by_id'),
-            ('housing_allocationhistory', 'house_id'),
-            ('housing_allocationhistory', 'beneficiary_id'),
-            ('housing_allocationhistory', 'allocated_by_id'),
-            ('housing_householdmember',   'application_id'),
-            # Django M2M through-tables for CustomUser (groups, user_permissions)
-            ('housing_customuser_groups',           'customuser_id'),
-            ('housing_customuser_user_permissions', 'customuser_id'),
-        ]
-
-        # authtoken_token is present when rest_framework.authtoken is installed;
-        # check before touching it.
-        cursor.execute("""
-            SELECT EXISTS (
-                SELECT 1 FROM information_schema.tables
-                WHERE table_schema = 'public'
-                  AND table_name   = 'authtoken_token'
-            )
+    # ── 6. Re-add FK constraints ──────────────────────────────────────────────
+    fk_defs = [
+        ('housing_house',             'allocated_to_id', 'housing_customuser', 'id', 'SET NULL'),
+        ('housing_application',       'applicant_id',    'housing_customuser', 'id', 'CASCADE'),
+        ('housing_application',       'reviewed_by_id',  'housing_customuser', 'id', 'SET NULL'),
+        ('housing_allocationhistory', 'house_id',        'housing_house',      'id', 'CASCADE'),
+        ('housing_allocationhistory', 'beneficiary_id',  'housing_customuser', 'id', 'CASCADE'),
+        ('housing_allocationhistory', 'allocated_by_id', 'housing_customuser', 'id', 'SET NULL'),
+        ('housing_householdmember',   'application_id',  'housing_application','id', 'CASCADE'),
+    ]
+    for ftable, fcol, rtable, rcol, on_delete in fk_defs:
+        cursor.execute(f"""
+            ALTER TABLE "{ftable}"
+            ADD FOREIGN KEY ("{fcol}")
+            REFERENCES "{rtable}" ("{rcol}")
+            ON DELETE {on_delete}
+            DEFERRABLE INITIALLY DEFERRED
         """)
-        if cursor.fetchone()[0]:
-            fk_columns.append(('authtoken_token', 'user_id'))
 
-        for table, col in fk_columns:
-            # Guard: only change columns that are still bigint (idempotency).
-            cursor.execute("""
-                SELECT data_type
-                FROM information_schema.columns
-                WHERE table_schema = 'public'
-                  AND table_name   = %s
-                  AND column_name  = %s
-            """, [table, col])
-            row = cursor.fetchone()
-            if row and row[0] != 'uuid':
-                cursor.execute(
-                    f'ALTER TABLE "{table}" '
-                    f'ALTER COLUMN "{col}" TYPE uuid USING gen_random_uuid()'
-                )
 
-        # FK constraints are intentionally NOT re-added here.
-        # The AlterField operations below will introspect the database (finding
-        # no existing FK constraints), change the column types a second time
-        # (uuid → uuid via "col"::uuid, which is a valid no-op cast on PG),
-        # and then recreate all FK constraints with the correct Django-generated
-        # names.
+def forward(apps, schema_editor):
+    """
+    Database-level UUID conversion.
+
+    • PostgreSQL: raw SQL via _convert_postgresql() — AlterField cannot cast
+      bigint → uuid without gen_random_uuid(); this function handles
+      everything (drop FKs, change PK columns, change FK columns, re-add FKs).
+
+    • SQLite: call schema_editor.alter_field() for each model so Django
+      performs its standard table-recreation approach.
+    """
+    vendor = schema_editor.connection.vendor
+
+    if vendor == 'postgresql':
+        with schema_editor.connection.cursor() as cursor:
+            _convert_postgresql(cursor)
+
+    else:
+        # SQLite (and any other backend): use Django's own schema_editor.
+        # The historical model from apps.get_model() has the correct
+        # _meta.db_table and field definitions for the state *before* 0008.
+        for model_name in [
+            'CustomUser', 'House', 'Application',
+            'HouseholdMember', 'AllocationHistory',
+        ]:
+            Model = apps.get_model('housing', model_name)
+            old_field = Model._meta.get_field('id')
+            new_field = _uuid_field()
+            new_field.set_attributes_from_name('id')
+            schema_editor.alter_field(Model, old_field, new_field)
 
 
 class Migration(migrations.Migration):
     """
-    Switches all model primary keys from integer AutoField to UUIDField.
+    Converts all model primary keys from BigAutoField (bigint) to UUIDField.
 
-    PostgreSQL fix: AlterField generates USING "id"::uuid which fails for
-    bigint → uuid.  A RunPython step runs first and uses gen_random_uuid()
-    instead.  The subsequent AlterField operations are then effectively no-ops
-    at the type-change level on PostgreSQL, but they handle Django's internal
-    migration state and re-add FK constraints with their proper names.
+    Uses SeparateDatabaseAndState so that Django's built-in AlterField
+    operations ONLY update the migration state (what Django tracks internally)
+    and do NOT attempt to run ALTER TABLE … ALTER COLUMN … USING "id"::uuid
+    against the database — that cast fails on PostgreSQL for bigint → uuid.
 
-    SQLite: RunPython is a no-op; AlterField handles conversion via the
-    standard table-recreation approach.
+    All actual database work is handled by the forward() RunPython, which
+    uses gen_random_uuid() on PostgreSQL and Django's schema_editor on SQLite.
 
-    IMPORTANT: This migration requires a clean (empty) database.  Existing
-    integer PK / FK values cannot be mapped to UUIDs; any data must be
-    re-entered after applying this migration.
+    IMPORTANT: Requires a clean (empty) database.  Existing integer PK values
+    cannot be preserved; re-enter data after applying this migration.
     """
 
     dependencies = [
@@ -143,66 +193,44 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        # Must run before AlterField on PostgreSQL.
-        migrations.RunPython(convert_pks_to_uuid, migrations.RunPython.noop),
+        migrations.SeparateDatabaseAndState(
+            # database_operations: what actually runs against the DB.
+            # RunPython handles both PostgreSQL (raw SQL) and SQLite
+            # (schema_editor.alter_field).  AlterField is intentionally
+            # absent here so it never generates USING "id"::uuid on PG.
+            database_operations=[
+                migrations.RunPython(forward, migrations.RunPython.noop),
+            ],
 
-        # ── CustomUser ────────────────────────────────────────────────────────
-        migrations.AlterField(
-            model_name='customuser',
-            name='id',
-            field=models.UUIDField(
-                default=uuid.uuid4,
-                editable=False,
-                primary_key=True,
-                serialize=False,
-            ),
-        ),
-
-        # ── House ─────────────────────────────────────────────────────────────
-        migrations.AlterField(
-            model_name='house',
-            name='id',
-            field=models.UUIDField(
-                default=uuid.uuid4,
-                editable=False,
-                primary_key=True,
-                serialize=False,
-            ),
-        ),
-
-        # ── Application ───────────────────────────────────────────────────────
-        migrations.AlterField(
-            model_name='application',
-            name='id',
-            field=models.UUIDField(
-                default=uuid.uuid4,
-                editable=False,
-                primary_key=True,
-                serialize=False,
-            ),
-        ),
-
-        # ── HouseholdMember ───────────────────────────────────────────────────
-        migrations.AlterField(
-            model_name='householdmember',
-            name='id',
-            field=models.UUIDField(
-                default=uuid.uuid4,
-                editable=False,
-                primary_key=True,
-                serialize=False,
-            ),
-        ),
-
-        # ── AllocationHistory ─────────────────────────────────────────────────
-        migrations.AlterField(
-            model_name='allocationhistory',
-            name='id',
-            field=models.UUIDField(
-                default=uuid.uuid4,
-                editable=False,
-                primary_key=True,
-                serialize=False,
-            ),
+            # state_operations: what Django records in its migration state.
+            # These keep Django's internal schema knowledge correct so that
+            # future migrations generate the right SQL.
+            state_operations=[
+                migrations.AlterField(
+                    model_name='customuser',
+                    name='id',
+                    field=_uuid_field(),
+                ),
+                migrations.AlterField(
+                    model_name='house',
+                    name='id',
+                    field=_uuid_field(),
+                ),
+                migrations.AlterField(
+                    model_name='application',
+                    name='id',
+                    field=_uuid_field(),
+                ),
+                migrations.AlterField(
+                    model_name='householdmember',
+                    name='id',
+                    field=_uuid_field(),
+                ),
+                migrations.AlterField(
+                    model_name='allocationhistory',
+                    name='id',
+                    field=_uuid_field(),
+                ),
+            ],
         ),
     ]
